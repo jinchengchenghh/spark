@@ -129,13 +129,21 @@ public class TaskMemoryManager {
     this.consumers = new HashSet<>();
   }
 
+  public long acquireExecutionMemory(long required, MemoryConsumer consumer) {
+    long got = acquireExecutionMemory(required, consumer, false);
+    if (got < required) {
+      got += acquireExecutionMemory(required, consumer, true);
+    }
+    return got;
+  }
+
   /**
    * Acquire N bytes of memory for a consumer. If there is no enough memory, it will call
    * spill() of consumers to release more memory.
    *
    * @return number of bytes successfully granted (<= N).
    */
-  public long acquireExecutionMemory(long required, MemoryConsumer consumer) {
+  public long acquireExecutionMemory(long required, MemoryConsumer consumer, boolean force) {
     assert(required >= 0);
     assert(consumer != null);
     MemoryMode mode = consumer.getMode();
@@ -174,7 +182,8 @@ public class TaskMemoryManager {
           List<MemoryConsumer> cList = currentEntry.getValue();
           MemoryConsumer c = cList.get(cList.size() - 1);
           try {
-            long released = c.spill(required - got, consumer);
+            long released = force ? c.forceSpill(required - got, consumer)
+                    : c.spill(required - got, consumer);
             if (released > 0) {
               logger.debug("Task {} released {} from {} for {}", taskAttemptId,
                 Utils.bytesToString(released), c, consumer);
@@ -210,7 +219,8 @@ public class TaskMemoryManager {
       // try again in the next loop iteration.
       while (got < required) {
         try {
-          long released = consumer.spill(required - got, consumer);
+          long released = force ? consumer.forceSpill(required - got, consumer)
+                  : consumer.spill(required - got, consumer);
           if (released > 0) {
             logger.debug("Task {} released {} from itself ({})", taskAttemptId,
               Utils.bytesToString(released), consumer);

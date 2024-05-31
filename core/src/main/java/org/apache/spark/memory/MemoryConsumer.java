@@ -81,6 +81,10 @@ public abstract class MemoryConsumer {
    */
   public abstract long spill(long size, MemoryConsumer trigger) throws IOException;
 
+  public long forceSpill(long size, MemoryConsumer trigger) throws IOException {
+    return 0;
+  }
+
   /**
    * Allocates a LongArray of `size`. Note that this method may throw `SparkOutOfMemoryError`
    * if Spark doesn't have enough memory for this allocation, or throw `TooLargePageException`

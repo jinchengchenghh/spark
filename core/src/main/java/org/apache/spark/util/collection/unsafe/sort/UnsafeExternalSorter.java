@@ -243,6 +243,49 @@ public final class UnsafeExternalSorter extends MemoryConsumer {
     return spillSize;
   }
 
+  @Override
+  public long forceSpill(long size, MemoryConsumer trigger) throws IOException {
+    if (trigger != this && readingIterator != null) {
+        return readingIterator.spill();
+    }
+
+    if (inMemSorter == null || inMemSorter.numRecords() <= 0) {
+      // There could still be some memory allocated when there are no records in the in-memory
+      // sorter. We will not spill it however, to ensure that we can always process at least one
+      // record before spilling. See the comments in `allocateMemoryForRecordIfNecessary` for why
+      // this is necessary.
+      return 0L;
+    }
+
+    logger.info("Thread {} force spilling sort data of {} to disk ({} {} so far)",
+            Thread.currentThread().getId(),
+            Utils.bytesToString(getMemoryUsage()),
+            spillWriters.size(),
+            spillWriters.size() > 1 ? " times" : " time");
+
+    ShuffleWriteMetrics writeMetrics = new ShuffleWriteMetrics();
+
+    final UnsafeSorterSpillWriter spillWriter =
+            new UnsafeSorterSpillWriter(blockManager, fileBufferSizeBytes, writeMetrics,
+                    inMemSorter.numRecords());
+    spillWriters.add(spillWriter);
+    spillIterator(inMemSorter.getSortedIterator(), spillWriter);
+
+    final long spillSize = freeMemory();
+    // Note that this is more-or-less going to be a multiple of the page size, so wasted space in
+    // pages will currently be counted as memory spilled even though that space isn't actually
+    // written to disk. This also counts the space needed to store the sorter's pointer array.
+    inMemSorter.freeMemory();
+    // Reset the in-memory sorter's pointer array only after freeing up the memory pages holding the
+    // records. Otherwise, if the task is over allocated memory, then without freeing the memory
+    // pages, we might not be able to get memory for the pointer array.
+
+    taskContext.taskMetrics().incMemoryBytesSpilled(spillSize);
+    taskContext.taskMetrics().incDiskBytesSpilled(writeMetrics.bytesWritten());
+    totalSpillBytes += spillSize;
+    return spillSize;
+  }
+
   /**
    * Return the total memory usage of this sorter, including the data pages and the sorter's pointer
    * array.
